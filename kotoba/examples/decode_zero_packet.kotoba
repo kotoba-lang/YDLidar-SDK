@@ -1,0 +1,4 @@
+(defn main [] :i64
+  (if (checksum-ok? "AA55010153AE53AEAB540000")
+    (sample-distance-mm "AA55010153AE53AEAB540000" 0)
+    -1))

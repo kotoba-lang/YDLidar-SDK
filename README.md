@@ -15,7 +15,7 @@
 
 # Introduction
 
-YDLidar SDK is the software development kit designed for all YDLIDAR products. It is developed based on C/C++ following YDLidar SDK Communication Protocol, and provides easy-to-use C/C++, Python, C# style API. With YDLidar SDK, users can quickly connect to YDLidar products and receive Laser scan data.
+YDLidar SDK is the software development kit designed for all YDLIDAR products. It is developed based on C/C++ following YDLidar SDK Communication Protocol, and provides easy-to-use C/C++, Python, C#, and Kotoba style API. With YDLidar SDK, users can quickly connect to YDLidar products and receive Laser scan data. The Kotoba binding is an in-language scan/sample codec; it does not FFI the C++ driver, and the host owns the port.
 
 YDLidar SDK consists of YDLidar SDK communication protocol, YDLidar SDK core, YDLidar SDK API, Linux/windows samples, and Python demo.
 
@@ -28,6 +28,7 @@ YDLidar SDK consists of YDLidar SDK communication protocol, YDLidar SDK core, YD
 * C / C++
 * Python2 on Windows, Python2/Python3 on Linux
 * C#
+* Kotoba (scan/sample codec and protocol framing; see [kotoba/](kotoba/))
 
 ## YDLidar SDK Communication Protocol
 YDLidar SDK communication protocol opens to all users. It is the communication protocol between user programs and YDLIDAR products. The protocol consists of control commands and data format. Please refer to the [YDLidar SDK Communication Protocol](doc/YDLidar-SDK-Communication-Protocol.md) for detailed information.
