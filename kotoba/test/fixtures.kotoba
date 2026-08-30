@@ -1,0 +1,174 @@
+;; Vendored YDLidar communication-protocol vectors. No USB, no device.
+;; Each test_* is 1 pass / 0 fail. Fresh instantiateKotoba per export.
+
+(defn zero-hex [] :string "AA55010153AE53AEAB540000")
+(defn zero-intensity-hex [] :string "AA55010153AE53AEAB54000000")
+(defn two-sample-hex [] :string "AA550002E56FBD795233A00F007D")
+(defn freq-hex [] :string "AA55C90153AE53AE63540000")
+(defn intensity-two-hex [] :string "AA550002E56FBD79082E1FE56F000000")
+(defn bad-cs-hex [] :string "AA55010153AE53AEAB540001")
+(defn info-hex [] :string "A55A14000000040402010130313233343536373839414243444546")
+(defn health-hex [] :string "A55A0300000006000000")
+
+(defn doc-i64 [d :document k :keyword] :string
+  (document-edn-print (option-or (document-get d k) (document nil))))
+
+(defn test-encode-scan-cmd [] :i64
+  (if (string=? (encode-cmd (cmd-scan)) "A560") 1 0))
+
+(defn test-encode-stop-cmd [] :i64
+  (if (string=? (encode-cmd (cmd-stop)) "A565") 1 0))
+
+(defn test-encode-reset-cmd [] :i64
+  (if (string=? (encode-cmd (cmd-reset)) "A580") 1 0))
+
+(defn test-encode-info-cmd [] :i64
+  (if (string=? (encode-cmd (cmd-get-info)) "A590") 1 0))
+
+(defn test-encode-health-cmd [] :i64
+  (if (string=? (encode-cmd (cmd-get-health)) "A592") 1 0))
+
+(defn test-cmd-from-hex [] :i64
+  (if (and (= (cmd-from-hex "A560") 96)
+           (= (cmd-from-hex "55AA") -1))
+    1
+    0))
+
+(defn test-payload-cmd [] :i64
+  (if (string=? (encode-cmd-payload 208 "01") "A5D0010175")
+    1
+    0))
+
+(defn test-official-zero-checksum [] :i64
+  (if (checksum-ok? (zero-hex)) 1 0))
+
+(defn test-official-zero-fields [] :i64
+  (let [s (zero-hex)]
+    (if (and (scan-zero? s)
+             (and (= (scan-lsn s) 1)
+                  (and (= (scan-fsa s) 44627)
+                       (and (= (sample-si s 0) 0)
+                            (= (sample-distance-mm s 0) 0)))))
+      1
+      0)))
+
+(defn test-official-zero-angle [] :i64
+  (if (= (angle-mdeg (sample-angle-q6 (zero-hex) 0)) 348640)
+    1
+    0))
+
+(defn test-official-intensity-zero [] :i64
+  (let [s (zero-intensity-hex)]
+    (if (and (checksum-ok? s)
+             (and (= (scan-sample-width s) 3)
+                  (and (= (sample-intensity s 0) 0)
+                       (= (sample-distance-mm s 0) 0))))
+      1
+      0)))
+
+(defn test-two-sample-triangle [] :i64
+  (let [s (two-sample-hex)]
+    (if (and (checksum-ok? s)
+             (and (= (sample-distance-mm s 0) 1000)
+                  (= (sample-distance-mm s 1) 8000)))
+      1
+      0)))
+
+(defn test-two-sample-angles [] :i64
+  (let [s (two-sample-hex)]
+    (if (and (= (angle-mdeg (sample-angle-q6 s 0)) 223781)
+             (= (angle-mdeg (sample-angle-q6 s 1)) 243468))
+      1
+      0)))
+
+(defn test-zero-scan-frequency [] :i64
+  (let [s (freq-hex)]
+    (if (and (checksum-ok? s)
+             (and (scan-zero? s) (= (scan-freq-dhz s) 100)))
+      1
+      0)))
+
+(defn test-intensity-sample [] :i64
+  (let [s (intensity-two-hex)]
+    (if (and (checksum-ok? s)
+             (and (= (sample-intensity s 0) 287)
+                  (and (= (sample-distance-mm s 0) 7161)
+                       (= (sample-intensity s 1) 0))))
+      1
+      0)))
+
+(defn test-bad-checksum [] :i64
+  (if (not (checksum-ok? (bad-cs-hex)))
+    1
+    0))
+
+(defn test-encode-scan-roundtrip [] :i64
+  (let [out (encode-scan 1 1 44627 44627 "0000")]
+    (if (string=? out (zero-hex))
+      1
+      0)))
+
+(defn test-decode-scan-ok [] :i64
+  (let [d (decode-scan (zero-hex))
+        samples (option-or (document-get d :samples) (document []))
+        s0 (option-or (document-vector-at samples 0) (document nil))]
+    (if (and (string=? (doc-i64 d :ok) "1")
+             (and (string=? (doc-i64 d :zero) "1")
+                  (and (string=? (doc-i64 d :lsn) "1")
+                       (string=? (document-edn-print s0) "0"))))
+      1
+      0)))
+
+(defn test-decode-scan-reject [] :i64
+  (if (string=? (doc-i64 (decode-scan (bad-cs-hex)) :ok) "0")
+    1
+    0))
+
+(defn test-ans-info-header [] :i64
+  (if (and (string=? (encode-ans-header 20 0 4) "A55A1400000004")
+           (and (ans-sync? (info-hex))
+                (and (= (ans-size (info-hex)) 20)
+                     (= (ans-type (info-hex)) 4))))
+    1
+    0))
+
+(defn test-ans-health-header [] :i64
+  (if (and (string=? (encode-ans-header 3 0 6) "A55A0300000006")
+           (and (= (ans-size (health-hex)) 3)
+                (= (ans-type (health-hex)) 6)))
+    1
+    0))
+
+(defn test-device-info [] :i64
+  (let [d (decode-device-info (info-hex))]
+    (if (and (string=? (doc-i64 d :ok) "1")
+             (and (string=? (doc-i64 d :model) "4")
+                  (and (string=? (doc-i64 d :firmware) "258")
+                       (string=? (doc-i64 d :hardware) "1"))))
+      1
+      0)))
+
+(defn test-health [] :i64
+  (let [d (decode-health (health-hex))]
+    (if (and (string=? (doc-i64 d :ok) "1")
+             (and (string=? (doc-i64 d :status) "0")
+                  (string=? (doc-i64 d :error) "0")))
+      1
+      0)))
+
+(defn test-packet-kind [] :i64
+  (if (and (= (packet-kind "A560") :cmd)
+           (and (= (packet-kind (zero-hex)) :scan)
+                (and (= (packet-kind (info-hex)) :ans)
+                     (= (packet-kind "00") :invalid))))
+    1
+    0))
+
+(defn test-constants [] :i64
+  (if (and (= (ph) 21930)
+           (and (= (cmd-sync) 165)
+                (and (= (cmd-scan) 96)
+                     (and (= (ans-measurement) 129)
+                          (= (ans-devinfo) 4)))))
+    1
+    0))

@@ -67,6 +67,7 @@ MESSAGE(STATUS " __________________________ OPTIONS ____________________________
 SHOW_CONFIG_LINE("Build YDLidar-SDK as a shared library?　　" BUILD_SHARED_LIBS)
 SHOW_CONFIG_LINE("Build Examples?　　　　　　　　　　　　　　" BUILD_EXAMPLES)
 SHOW_CONFIG_LINE("Build C Sharp API?　　　　　　　　　　　　" BUILD_CSHARP)
+SHOW_CONFIG_LINE("Build Kotoba codec?　　　　　　　　　　　" BUILD_KOTOBA)
 SHOW_CONFIG_LINE("Build TEST?  			　　　" BUILD_TEST)
 MESSAGE(STATUS "")
 

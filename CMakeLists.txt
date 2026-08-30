@@ -70,6 +70,7 @@ endif()
 option( BUILD_SHARED_LIBS "Build shared libraries." OFF)
 option( BUILD_EXAMPLES "Build Example." ON)
 option( BUILD_CSHARP "Build CSharp." OFF)
+option( BUILD_KOTOBA "Build Kotoba scan/sample codec." ON)
 option( BUILD_TEST "Build Test." OFF)
 
 ############################################################################
@@ -78,6 +79,7 @@ find_package(SWIG)
 find_package(PythonInterp)
 find_package(PythonLibs)
 find_package(GTest)
+find_program(KOTOBA_EXECUTABLE kotoba)
 
 ############################################################################
 # include headers
@@ -154,6 +156,17 @@ if(BUILD_CSHARP)
     include_directories(csharp)
     add_subdirectory(csharp)
 endif()
+endif()
+
+##############################################
+# build ydlidar sdk kotoba codec (no C++ FFI)
+if(BUILD_KOTOBA)
+    if(KOTOBA_EXECUTABLE)
+        message(STATUS "build kotoba codec....")
+        add_subdirectory(kotoba)
+    else()
+        message(STATUS "kotoba CLI not found; skip kotoba codec")
+    endif()
 endif()
 
 ###############################################################################

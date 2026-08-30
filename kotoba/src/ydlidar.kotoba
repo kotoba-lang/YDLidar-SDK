@@ -1,0 +1,324 @@
+(ns ydlidar
+  (:export [ph cmd-sync cmd-scan cmd-stop cmd-reset cmd-get-info cmd-get-health
+            ans-devinfo ans-health ans-measurement
+            hex-length hex-byte hex-byte-at hex-u16le hex-u16le-at
+            encode-cmd encode-cmd-payload cmd-from-hex
+            checksum-scan checksum-ok?
+            encode-scan
+            scan-ct scan-lsn scan-fsa scan-lsa scan-cs
+            scan-zero? scan-freq-dhz scan-sample-width
+            sample-si sample-distance-mm sample-intensity sample-angle-q6
+            angle-mdeg
+            decode-scan
+            encode-ans-header ans-sync? ans-size ans-subtype ans-type
+            decode-device-info decode-health
+            packet-kind]))
+
+;; YDLidar triangle/TOF scan-sample codec and command framing (protocol v1).
+;; Strings in, strings out. The host owns the serial or TCP port.
+;; Default policy is empty; this module requests no USB, fs, or network.
+
+(defn ph [] :i64 21930)
+(defn cmd-sync [] :i64 165)
+(defn cmd-scan [] :i64 96)
+(defn cmd-stop [] :i64 101)
+(defn cmd-reset [] :i64 128)
+(defn cmd-get-info [] :i64 144)
+(defn cmd-get-health [] :i64 146)
+(defn ans-devinfo [] :i64 4)
+(defn ans-health [] :i64 6)
+(defn ans-measurement [] :i64 129)
+
+(defn box-i64 [n :i64] :document
+  (document-edn-read (string-from-i64 n)))
+
+(defn box-str [s :string] :document
+  (document-edn-read (string-concat (string-concat "\"" s) "\"")))
+
+(defn u8 [n :i64] :i64
+  (bit-and n 255))
+
+(defn u16 [n :i64] :i64
+  (bit-and n 65535))
+
+(defn hex-digit [n :i64] :string
+  (let [d (bit-and n 15)]
+    (string-substring "0123456789ABCDEF" d (+ d 1))))
+
+(defn hex-byte [n :i64] :string
+  (let [b (u8 n)]
+    (string-concat (hex-digit (quot b 16)) (hex-digit b))))
+
+(defn hex-u16le [n :i64] :string
+  (let [w (u16 n)]
+    (string-concat (hex-byte w) (hex-byte (quot w 256)))))
+
+(defn hex-u32le [n :i64] :string
+  (string-concat (hex-u16le n) (hex-u16le (quot n 65536))))
+
+(defn nibble [cp :i64] :i64
+  (cond
+    (and (>= cp 48) (<= cp 57)) (- cp 48)
+    (and (>= cp 65) (<= cp 70)) (- cp 55)
+    (and (>= cp 97) (<= cp 102)) (- cp 87)
+    :else -1))
+
+(defn hex-length [s :string] :i64
+  (quot (string-length s) 2))
+
+(defn hex-byte-at [s :string i :i64] :i64
+  (let [j (* i 2)
+        n (string-length s)]
+    (if (>= (+ j 1) n)
+      -1
+      (let [hi (nibble (string-code-point-at s j))
+            lo (nibble (string-code-point-at s (+ j 1)))]
+        (if (or (< hi 0) (< lo 0))
+          -1
+          (+ (* hi 16) lo))))))
+
+(defn hex-u16le-at [s :string i :i64] :i64
+  (let [lo (hex-byte-at s i)
+        hi (hex-byte-at s (+ i 1))]
+    (if (or (< lo 0) (< hi 0))
+      -1
+      (+ lo (* hi 256)))))
+
+(defn hex-u32le-at [s :string i :i64] :i64
+  (let [lo (hex-u16le-at s i)
+        hi (hex-u16le-at s (+ i 2))]
+    (if (or (< lo 0) (< hi 0))
+      -1
+      (+ lo (* hi 65536)))))
+
+(defn encode-cmd [cmd :i64] :string
+  (string-concat "A5" (hex-byte cmd)))
+
+(defn xor-bytes [s :string i :i64 n :i64 acc :i64] :i64
+  (if (>= i n)
+    acc
+    (xor-bytes s (+ i 1) n (bit-xor acc (hex-byte-at s i)))))
+
+(defn encode-cmd-payload [cmd :i64 payload :string] :string
+  (let [n (hex-length payload)
+        head (string-concat (string-concat "A5" (hex-byte (+ (bit-and cmd 127) 128))) (hex-byte n))
+        body (string-concat head payload)]
+    (string-concat body (hex-byte (xor-bytes body 0 (hex-length body) 0)))))
+
+(defn cmd-from-hex [s :string] :i64
+  (if (and (>= (hex-length s) 2) (= (hex-byte-at s 0) 165))
+    (hex-byte-at s 1)
+    -1))
+
+(defn scan-ct [s :string] :i64
+  (hex-byte-at s 2))
+
+(defn scan-lsn [s :string] :i64
+  (hex-byte-at s 3))
+
+(defn scan-fsa [s :string] :i64
+  (hex-u16le-at s 4))
+
+(defn scan-lsa [s :string] :i64
+  (hex-u16le-at s 6))
+
+(defn scan-cs [s :string] :i64
+  (hex-u16le-at s 8))
+
+(defn scan-sample-width [s :string] :i64
+  (let [lsn (scan-lsn s)
+        rest (- (hex-length s) 10)]
+    (if (<= lsn 0)
+      0
+      (quot rest lsn))))
+
+(defn xor-samples2 [s :string i :i64 n :i64 acc :i64] :i64
+  (if (>= i n)
+    acc
+    (xor-samples2 s (+ i 1) n (bit-xor acc (hex-u16le-at s (+ 10 (* i 2)))))))
+
+(defn xor-samples3 [s :string i :i64 n :i64 acc :i64] :i64
+  (if (>= i n)
+    acc
+    (let [base (+ 10 (* i 3))]
+      (xor-samples3 s (+ i 1) n
+                    (bit-xor (bit-xor acc (hex-byte-at s base))
+                             (hex-u16le-at s (+ base 1)))))))
+
+(defn checksum-scan [s :string] :i64
+  (let [ct (scan-ct s)
+        lsn (scan-lsn s)
+        fsa (scan-fsa s)
+        lsa (scan-lsa s)
+        width (scan-sample-width s)
+        acc0 (bit-xor (ph) fsa)
+        acc1 (if (= width 3)
+               (xor-samples3 s 0 lsn acc0)
+               (xor-samples2 s 0 lsn acc0))]
+    (bit-xor (bit-xor acc1 (+ (* lsn 256) ct)) lsa)))
+
+(defn scan-header? [s :string] :bool
+  (and (>= (hex-length s) 10)
+       (= (hex-u16le-at s 0) (ph))))
+
+(defn checksum-ok? [s :string] :bool
+  (if (not (scan-header? s))
+    false
+    (let [lsn (scan-lsn s)
+          width (scan-sample-width s)
+          rest (- (hex-length s) 10)]
+      (and (> lsn 0)
+           (and (or (= width 2) (= width 3))
+                (and (= rest (* width lsn))
+                     (= (checksum-scan s) (scan-cs s))))))))
+
+(defn encode-scan [ct :i64 lsn :i64 fsa :i64 lsa :i64 samples :string] :string
+  (let [stub (string-concat
+              (string-concat
+               (string-concat
+                (string-concat "AA55" (hex-byte ct))
+                (hex-byte lsn))
+               (string-concat (hex-u16le fsa) (hex-u16le lsa)))
+              (string-concat "0000" samples))
+        cs (checksum-scan stub)]
+    (string-concat
+     (string-concat
+      (string-concat
+       (string-concat "AA55" (hex-byte ct))
+       (hex-byte lsn))
+      (string-concat (hex-u16le fsa) (hex-u16le lsa)))
+     (string-concat (hex-u16le cs) samples))))
+
+(defn scan-zero? [s :string] :bool
+  (= (bit-and (scan-ct s) 1) 1))
+
+(defn scan-freq-dhz [s :string] :i64
+  (if (scan-zero? s)
+    (quot (scan-ct s) 2)
+    0))
+
+(defn sample-si [s :string i :i64] :i64
+  (if (= (scan-sample-width s) 3)
+    (hex-u16le-at s (+ 11 (* i 3)))
+    (hex-u16le-at s (+ 10 (* i 2)))))
+
+(defn sample-distance-mm [s :string i :i64] :i64
+  (quot (sample-si s i) 4))
+
+(defn sample-intensity [s :string i :i64] :i64
+  (if (not (= (scan-sample-width s) 3))
+    0
+    (let [base (+ 10 (* i 3))]
+      (+ (* (bit-and (hex-byte-at s (+ base 1)) 3) 256)
+         (hex-byte-at s base)))))
+
+(defn fsa-q6 [s :string] :i64
+  (quot (scan-fsa s) 2))
+
+(defn lsa-q6 [s :string] :i64
+  (quot (scan-lsa s) 2))
+
+(defn angle-diff-q6 [s :string] :i64
+  (let [d (- (lsa-q6 s) (fsa-q6 s))]
+    (if (< d 0)
+      (+ d 23040)
+      d)))
+
+(defn sample-angle-q6 [s :string i :i64] :i64
+  (let [lsn (scan-lsn s)]
+    (if (<= lsn 1)
+      (fsa-q6 s)
+      (+ (fsa-q6 s) (quot (* i (angle-diff-q6 s)) (- lsn 1))))))
+
+(defn angle-mdeg [q6 :i64] :i64
+  (quot (* q6 1000) 64))
+
+(defn collect-si [s :string i :i64 n :i64 acc :document] :document
+  (if (>= i n)
+    acc
+    (let [si (sample-si s i)]
+      (collect-si s (+ i 1) n (document-vector-conj acc (box-i64 si))))))
+
+(defn collect-intensity [s :string i :i64 n :i64 acc :document] :document
+  (if (>= i n)
+    acc
+    (let [inten (sample-intensity s i)]
+      (collect-intensity s (+ i 1) n (document-vector-conj acc (box-i64 inten))))))
+
+(defn fail-scan [] :document
+  (document-assoc (document {}) :ok (box-i64 0)))
+
+(defn decode-scan [s :string] :document
+  (if (not (checksum-ok? s))
+    (fail-scan)
+    (let [lsn (scan-lsn s)
+          width (scan-sample-width s)
+          ct (scan-ct s)
+          fsa (scan-fsa s)
+          lsa (scan-lsa s)
+          cs (scan-cs s)
+          zero (if (scan-zero? s) 1 0)
+          freq (scan-freq-dhz s)
+          m0 (document-assoc (document {}) :ok (box-i64 1))
+          m1 (document-assoc m0 :ct (box-i64 ct))
+          m2 (document-assoc m1 :lsn (box-i64 lsn))
+          m3 (document-assoc m2 :fsa (box-i64 fsa))
+          m4 (document-assoc m3 :lsa (box-i64 lsa))
+          m5 (document-assoc m4 :cs (box-i64 cs))
+          m6 (document-assoc m5 :width (box-i64 width))
+          m7 (document-assoc m6 :zero (box-i64 zero))
+          m8 (document-assoc m7 :freq-dhz (box-i64 freq))
+          m9 (document-assoc m8 :samples (collect-si s 0 lsn (document [])))]
+      (document-assoc m9 :intensities (collect-intensity s 0 lsn (document []))))))
+
+(defn encode-ans-header [size :i64 subtype :i64 type :i64] :string
+  (let [packed (+ (bit-and size 1073741823) (* subtype 1073741824))]
+    (string-concat (string-concat "A55A" (hex-u32le packed)) (hex-byte type))))
+
+(defn ans-sync? [s :string] :bool
+  (and (>= (hex-length s) 7)
+       (and (= (hex-byte-at s 0) 165) (= (hex-byte-at s 1) 90))))
+
+(defn ans-size [s :string] :i64
+  (bit-and (hex-u32le-at s 2) 1073741823))
+
+(defn ans-subtype [s :string] :i64
+  (quot (hex-u32le-at s 2) 1073741824))
+
+(defn ans-type [s :string] :i64
+  (hex-byte-at s 6))
+
+(defn decode-device-info [s :string] :document
+  (if (or (not (ans-sync? s))
+          (or (not (= (ans-type s) 4)) (< (hex-length s) 27)))
+    (fail-scan)
+    (let [model (hex-byte-at s 7)
+          firmware (hex-u16le-at s 8)
+          hardware (hex-byte-at s 10)
+          serial (string-substring s 22 54)
+          m0 (document-assoc (document {}) :ok (box-i64 1))
+          m1 (document-assoc m0 :model (box-i64 model))
+          m2 (document-assoc m1 :firmware (box-i64 firmware))
+          m3 (document-assoc m2 :hardware (box-i64 hardware))]
+      (document-assoc m3 :serial (box-str serial)))))
+
+(defn decode-health [s :string] :document
+  (if (or (not (ans-sync? s))
+          (or (not (= (ans-type s) 6)) (< (hex-length s) 10)))
+    (fail-scan)
+    (let [status (hex-byte-at s 7)
+          error (hex-u16le-at s 8)
+          m0 (document-assoc (document {}) :ok (box-i64 1))
+          m1 (document-assoc m0 :status (box-i64 status))]
+      (document-assoc m1 :error (box-i64 error)))))
+
+(defn packet-kind [s :string] :keyword
+  (if (< (hex-length s) 2)
+    :invalid
+    (let [b0 (hex-byte-at s 0)
+          b1 (hex-byte-at s 1)]
+      (cond
+        (and (= b0 165) (= b1 90)) :ans
+        (= b0 165) :cmd
+        (and (= b0 170) (= b1 85)) :scan
+        :else :invalid))))
